@@ -1,0 +1,19 @@
+# Python virtual environment
+venv/
+__pycache__/
+
+
+.env
+/env
+
+# Generated output files
+*.html
+mongo_graph_viz.html
+
+# IDE/Editor specific files
+.vscode/
+.idea/
+
+
+.DS_Store
+
