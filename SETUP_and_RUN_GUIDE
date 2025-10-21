@@ -1,0 +1,477 @@
+# Complete Setup & Run Guide for Blue Enigma Project
+
+## Overview - Which Files To Run
+
+You DON'T need to run everything. Here's the correct order:
+
+```
+1️⃣ FIRST (One time only): python load_to_mongodb.py
+   └─ Loads data from JSON file into MongoDB
+   └─ Generates embeddings
+   └─ Creates vector search index
+   └─ Takes ~2-3 minutes
+
+2️⃣ THEN (Choose ONE):
+   
+   Option A - WEB INTERFACE (Recommended for demo):
+   └─ streamlit run app.py
+   └─ Opens at http://localhost:8501
+   └─ Full UI with chat + image upload
+
+   Option B - COMMAND LINE:
+   └─ python gemini_mongo_chat.py
+   └─ Terminal-based chat
+   └─ Same features as web, text-only
+
+3️⃣ OPTIONAL - Visualize Knowledge Graph:
+   └─ python visualize_from_mongodb.py
+   └─ Creates mongo_graph_viz.html
+   └─ Open in browser to see node relationships
+
+❌ DO NOT RUN:
+   • load_to_neo4j.py (not used in our architecture)
+   • pinecone_upload.py (not used - we use MongoDB)
+   • test_gemini.py (old testing file)
+   • hybrid_chat.py (old file - use app.py instead)
+```
+
+---
+
+## STEP 1: Environment Setup (5 minutes)
+
+### 1.1 Create .env File
+
+In your project root directory (`/Volumes/Untitled\ 2/Blue-engima-assignment/`), create a `.env` file:
+
+```bash
+# .env file
+GEMINI_API_KEY=your_api_key_here
+MONGO_URI=your_mongo_connection_string_here
+```
+
+### 1.2 Get API Keys
+
+#### Gemini API Key:
+1. Go to https://ai.google.dev/
+2. Click "Get API Key"
+3. Copy the key
+4. Paste into `.env` as: `GEMINI_API_KEY=sk-...`
+
+#### MongoDB Connection String:
+1. Go to https://cloud.mongodb.com/
+2. Create cluster (free tier available)
+3. Click "Connect" → "Drivers"
+4. Copy connection string
+5. Replace `<password>` with your password
+6. Paste into `.env` as: `MONGO_URI=mongodb+srv://user:pass@cluster.mongodb.net/...`
+
+### 1.3 Verify .env File
+
+```bash
+# Check if .env exists and has content
+cat .env
+
+# Expected output:
+# GEMINI_API_KEY=AIzaSyD...
+# MONGO_URI=mongodb+srv://...
+```
+
+---
+
+## STEP 2: Install Dependencies (3 minutes)
+
+```bash
+# Navigate to project directory
+cd /Volumes/Untitled\ 2/Blue-engima-assignment/
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Install all dependencies
+pip install -r requirements.txt
+```
+
+### Verify Installation
+
+```bash
+# Check if packages installed correctly
+pip list | grep -E "google|pymongo|streamlit|requests"
+
+# Expected output:
+# google-generativeai        0.4.0
+# pymongo                    4.6.0
+# streamlit                  1.28.0
+# requests                   2.31.0
+```
+
+---
+
+## STEP 3: Load Data (CRITICAL - Run Once)
+
+```bash
+python load_to_mongodb.py
+```
+
+### What It Does
+
+1. Reads `vietnam_travel_dataset.json`
+2. For each location:
+   - Extracts description text
+   - Sends to Gemini to generate 768-dimensional embedding
+   - Stores in MongoDB with embedding
+3. Creates cache TTL index
+4. Creates vector search index
+
+### Expected Output
+
+```
+🚀 Initializing clients...
+✓ MongoDB connection successful
+
+📂 Loading data from JSON file...
+✓ Loaded 15 nodes from dataset
+
+🗑️ Clearing existing documents from collection...
+✓ Deleted 0 documents
+
+📝 Preparing documents for embedding...
+Processing nodes: 100%|████████████| 15/15 [00:02<00:00,  7.50it/s]
+✓ Prepared 15 documents for embedding
+
+🔄 Embedding and uploading in batches of 50...
+Processing Batches: 100%|████████████| 1/1 [00:08<00:00,  8.32s/batch]
+
+==================================================
+✓ Embedding and upload complete!
+  - Total documents embedded: 15
+  - Failed documents: 0
+  - Total documents in collection: 15
+
+📑 Setting up vector search index...
+✓ Vector search index created/verified
+
+==================================================
+
+🎉 Data loading pipeline completed successfully!
+```
+
+### Troubleshooting
+
+**Error: "GEMINI_API_KEY not found"**
+- Verify `.env` file exists in project root
+- Check file name is exactly `.env`
+- Verify it contains: `GEMINI_API_KEY=your_key`
+
+**Error: "MONGO_URI not found"**
+- Verify `.env` contains: `MONGO_URI=mongodb+srv://...`
+- Test connection manually:
+  ```bash
+  python3 -c "from pymongo import MongoClient; import os; from dotenv import load_dotenv; load_dotenv(); client = MongoClient(os.getenv('MONGO_URI')); print(client.admin.command('ping'))"
+  ```
+
+**Error: "Embedding failed after 3 retries"**
+- Check internet connection
+- Verify Gemini API key is valid
+- Wait a few minutes and retry
+
+---
+
+## STEP 4: Choose Your Interface
+
+### Option A: Web Interface (Recommended for Testing)
+
+```bash
+streamlit run app.py
+```
+
+#### What You'll See
+
+```
+  You can now view your Streamlit app in your browser.
+
+  URL: http://localhost:8501
+
+  Network URL: http://192.168.x.x:8501
+```
+
+#### Auto-opens browser with:
+
+```
+✈️ Multi-Modal Vietnam Travel Assistant
+Powered by Gemini 2.5 Flash, MongoDB Atlas, and Intelligent Query Caching
+
+[Sidebar] 📸 Image Analysis
+└─ Upload image of Vietnamese landmark or food
+└─ See instant analysis
+
+[Main Area] 💬 Chat with your Assistant
+└─ Ask travel questions
+└─ Get context-aware answers
+└─ See cache stats
+```
+
+#### Example Usage
+
+**Interaction 1: Text Query**
+```
+Input: "What's the best time to visit Hanoi?"
+Output: 
+"February to May is ideal for visiting Hanoi. During this period...
+(response generated in 2.3s, cache miss)
+📊 Cache Stats: 0 hits, 1 misses (0% hit rate)"
+```
+
+**Interaction 2: Similar Query (Cached)**
+```
+Input: "When should I go to Hanoi?"
+Output:
+"February to May is ideal for visiting Hanoi..."
+✨ Response from smart cache (similar query found)
+(response served in 0.4s, cache hit!)
+📊 Cache Stats: 1 hits, 1 misses (50% hit rate)"
+```
+
+**Interaction 3: Image Upload**
+```
+Step 1: Upload image_pho.jpg
+Step 2: See analysis:
+"This is Pho Bo (beef noodle soup)...
+The clear broth is simmered for hours with spices..."
+
+Step 3: Follow-up question:
+Input: "Where can I find authentic pho in Hanoi?"
+Output:
+"Based on the Pho Bo you showed me..."
+```
+
+---
+
+### Option B: Command Line Interface
+
+```bash
+python gemini_mongo_chat.py
+```
+
+#### What You'll See
+
+```
+============================================================
+🎉 Welcome to Vietnam Travel Assistant (CLI)
+============================================================
+Features:
+  • Semantic search on MongoDB Atlas
+  • Intelligent query caching
+  • Multi-turn conversation history
+  • Powered by Gemini 2.5 Flash
+
+Type 'exit' or 'quit' to end the chat
+============================================================
+```
+
+#### Example Session
+
+```
+📝 You: What are popular destinations in northern Vietnam?
+
+⏳ Thinking...
+
+============================================================
+🤖 Assistant:
+============================================================
+
+Northern Vietnam offers several incredible destinations:
+
+**Hanoi** - Capital city, rich cultural heritage
+- Best time: February to May
+- Highlights: Ancient temples, French colonial architecture, street food
+
+**Ha Long Bay** - UNESCO World Heritage Site
+- Best time: February to May
+- Highlights: Limestone formations, boat cruises, hidden caves
+
+**Sapa** - Mountain retreat for trekking
+- Best time: October to April
+- Highlights: Ethnic minority villages, scenic valleys, rice terraces
+
+------------------------------------------------------------
+
+📝 You: Tell me about food experiences
+
+💾 Response from Cache (Similar Query Found)
+============================================================
+
+[Response from cache - served in 0.4s instead of 2.5s]
+
+📊 Cache Stats: 1 hits, 1 misses (50.0% hit rate)
+
+------------------------------------------------------------
+
+📝 You: exit
+
+👋 Thank you for using Vietnam Travel Assistant!
+
+📊 Final Cache Statistics:
+   Cache Hits: 1
+   Cache Misses: 1
+   Hit Rate: 50.0%
+```
+
+---
+
+## STEP 5: Visualize Knowledge Graph (Optional)
+
+```bash
+python visualize_from_mongodb.py
+```
+
+### Expected Output
+
+```
+🚀 Initializing graph visualization...
+
+📊 Building interactive graph visualization...
+📥 Fetching nodes from MongoDB...
+✓ Found 15 nodes
+
+🔵 Adding nodes to graph...
+Nodes: 100%|████████████| 15/15 [00:01<00:00, 14.21it/s]
+
+🔗 Adding connections to graph...
+Connections: 100%|████████████| 15/15 [00:00<00:00, 1000.20it/s]
+
+💾 Saving visualization...
+✓ Graph visualization saved!
+   📍 Location: /path/to/mongo_graph_viz.html
+   🌐 Open in browser: file:///path/to/mongo_graph_viz.html
+```
+
+### What It Shows
+
+Opens `mongo_graph_viz.html` with:
+- **Nodes:** Destinations (red=City, blue=Landmark, orange=Food)
+- **Edges:** Connections between locations
+- **Interactive:** Drag to move, scroll to zoom, click for details
+
+---
+
+## Testing Scenarios
+
+### Test 1: Cache Performance
+
+**Goal:** Verify caching is working
+
+**Steps:**
+1. Start web app: `streamlit run app.py`
+2. Ask: "Best time to visit Hanoi?"
+3. Note response time and cache stats
+4. Ask: "When should I go to Hanoi?"
+5. Note response is faster (cache hit)
+
+**Expected Results:**
+```
+Query 1: 2.3s (Cache Miss) | Stats: 0 hits, 1 miss
+Query 2: 0.4s (Cache Hit)  | Stats: 1 hit, 1 miss
+```
+
+### Test 2: Multi-Modal (Image Analysis)
+
+**Goal:** Verify image upload works
+
+**Steps:**
+1. Find a Vietnamese food image online (pho, banh mi, etc.)
+2. In web app sidebar, upload image
+3. See instant analysis
+
+**Expected Output:**
+```
+[Image displayed]
+Analysis:
+"Pho Bo (beef noodle soup) - Vietnam's national dish...
+Originated in early 20th century with French influence..."
+```
+
+### Test 3: Conversation Context
+
+**Goal:** Verify multi-turn conversations remember context
+
+**Steps:**
+1. Q1: "I like hiking"
+2. Q2: "Show me nature activities"
+3. Q3: "Best season for trekking?"
+4. Q4: "Can I do this with family?"
+
+**Expected:**
+- Each answer considers previous context
+- Q4 mentions family-friendly trekking options
+
+---
+
+## File Reference - What Each Does
+
+| File | Purpose | Run? | When? |
+|------|---------|------|-------|
+| `config.py` | Configuration (API keys, DB settings) | No | Auto-imported |
+| `utils.py` | Shared functions (embeddings, caching, LLM) | No | Auto-imported |
+| `load_to_mongodb.py` | Load data into MongoDB | **YES** | Once initially |
+| `app.py` | Web interface (Streamlit) | **YES** | For web UI |
+| `gemini_mongo_chat.py` | CLI interface | **YES** | For terminal chat |
+| `visualize_from_mongodb.py` | Graph explorer | **YES** | Optional, for graph viz |
+| `.env` | API keys & credentials | Manual | Create once |
+| `requirements.txt` | Python dependencies | No | Use with `pip install` |
+
+---
+
+## Quick Start Commands (Copy-Paste)
+
+```bash
+# Step 1: Create .env with your keys (use text editor)
+nano .env
+# Add: GEMINI_API_KEY=your_key
+# Add: MONGO_URI=your_mongo_uri
+
+# Step 2: Setup environment
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Step 3: Load data (one time)
+python load_to_mongodb.py
+
+# Step 4: Choose one:
+# Option A - Web UI:
+streamlit run app.py
+
+# Option B - CLI:
+python gemini_mongo_chat.py
+
+# Option C - Graph visualization:
+python visualize_from_mongodb.py
+```
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "ModuleNotFoundError: No module named 'streamlit'" | Run: `pip install -r requirements.txt` |
+| "Connection to MongoDB failed" | Check `.env` has valid `MONGO_URI` |
+| "API key invalid" | Verify `GEMINI_API_KEY` in `.env` |
+| "No embeddings generated" | Wait 2-3 min, then retry `load_to_mongodb.py` |
+| "Streamlit won't load at localhost:8501" | Try: `streamlit run app.py --logger.level=debug` |
+
+---
+
+## Success Indicators
+
+✅ You know everything is working when:
+
+1. `load_to_mongodb.py` completes with "15 documents embedded"
+2. Web app loads at http://localhost:8501 with no errors
+3. First question takes ~2-3 seconds
+4. Second similar question takes ~0.5 seconds
+5. Cache stats show hits increasing
+6. Graph visualization renders with 15 nodes and connections

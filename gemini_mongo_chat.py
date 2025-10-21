@@ -4,140 +4,122 @@ import requests
 import json
 from pymongo import MongoClient
 import google.generativeai as genai
+import utils
 
 # --- Configuration ---
-CHAT_MODEL_NAME = 'gemini-2.5-flash' # Using the model you confirmed works!
+CHAT_MODEL_NAME = 'gemini-2.5-flash'
 EMBEDDING_MODEL_NAME = 'models/text-embedding-004'
 TOP_K_VEC_SEARCH = 5
 
 # --- Initialize Clients ---
-# We still use the genai library for embeddings as it's working well.
-genai.configure(api_key=config.GEMINI_API_KEY) 
+print("🚀 Initializing MongoDB and Gemini clients...")
+genai.configure(api_key=config.GEMINI_API_KEY)
 
 try:
     client = MongoClient(config.MONGO_URI)
     db = client[config.MONGO_DATABASE_NAME]
     collection = db[config.MONGO_COLLECTION_NAME]
     client.admin.command('ping')
-    print("MongoDB connection successful.")
+    print("✓ MongoDB connection successful")
 except Exception as e:
-    print(f"Error connecting to MongoDB: {e}")
-    exit()
-
-# --- Helper Functions (No changes here) ---
-def get_embedding(text: str) -> list[float]:
-    if not text.strip(): return []
-    try:
-        return genai.embed_content(model=EMBEDDING_MODEL_NAME, content=text, task_type="retrieval_query")['embedding']
-    except Exception as e:
-        print(f"An error occurred while generating query embedding: {e}")
-        return []
-
-def mongodb_vector_search(query_embedding: list[float]) -> list[dict]:
-    if not query_embedding: return []
-    pipeline = [
-        {"$vectorSearch": {"index": config.MONGO_VECTOR_INDEX_NAME, "path": "embedding", "queryVector": query_embedding, "numCandidates": 100, "limit": TOP_K_VEC_SEARCH}},
-        {"$project": {"embedding": 0, "_id": 0, "score": {"$meta": "vectorSearchScore"}}}
-    ]
-    try:
-        return list(collection.aggregate(pipeline))
-    except Exception as e:
-        print(f"Error during vector search: {e}")
-        return []
-
-def fetch_relational_context(search_results: list[dict]) -> list[dict]:
-    if not search_results: return []
-    target_ids = [conn.get('target') for doc in search_results if 'connections' in doc for conn in doc['connections']]
-    if not target_ids: return []
-    try:
-        return list(collection.find({"id": {"$in": list(set(target_ids))}}, {"_id": 0, "embedding": 0}))
-    except Exception as e:
-        print(f"Error fetching relational context: {e}")
-        return []
-
-def build_prompt(user_query: str, vector_results: list, relational_results: list, history: list):
-    vec_context_str = "\n".join([f"- {item.get('name')} ({item.get('type')}, Score: {item.get('score', 0):.2f}): {item.get('description', '')[:120]}..." for item in vector_results])
-    rel_context_str = "\n".join([f"- {item.get('name')} ({item.get('type')}): {item.get('description', '')[:120]}..." for item in relational_results])
-    
-    # For the REST API, we'll build the history directly into the prompt string
-    history_str = "\n".join([f"Previous User Question: {entry['user']}\nPrevious Assistant Answer: {entry['assistant']}" for entry in history])
-
-    return f"""You are an expert travel assistant for Vietnam. Use ONLY the provided context below to answer the user's question. Be concise and helpful. If the context does not contain the answer, say so.
-
-## Conversation History:
-{history_str}
-
-## Context from Semantic Search (most relevant):
-{vec_context_str}
-
-## Context from Related Items:
-{rel_context_str}
-
-Based on all available information, answer the user's current question.
-User's Current Question: "{user_query}"
-"""
-
-# --- NEW: Function to call Gemini via REST API ---
-def call_gemini_rest(prompt: str) -> str:
-    """Calls the Gemini API using a direct requests.post call."""
-    api_url = f"https://generativelanguage.googleapis.com/v1/models/{CHAT_MODEL_NAME}:generateContent?key={config.GEMINI_API_KEY}"
-    
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        # Adding safety settings to prevent the model from blocking valid responses
-        "safetySettings": [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-    }
-    
-    try:
-        response = requests.post(api_url, json=payload)
-        response.raise_for_status() # Raises an exception for bad status codes (4xx or 5xx)
-        data = response.json()
-        
-        # Extract the text from the response
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Error connecting to Gemini REST API: {e}")
-        if 'response' in locals() and response is not None:
-            print("Response text:", response.text)
-        return "Sorry, I encountered a technical error. Please try again."
-    except (KeyError, IndexError) as e:
-        print(f"Error parsing Gemini response: {e}")
-        print("Full response data:", data)
-        return "Sorry, I received an unexpected response from the AI."
+    print(f"❌ Error connecting to MongoDB: {e}")
+    exit(1)
 
 def interactive_chat():
-    print("\n--- Gemini Powered Vietnam Travel Assistant ---")
-    print("Type 'exit' or 'quit' to end the chat.")
+    """Run interactive chat session with caching support."""
+    print("\n" + "="*60)
+    print("🎉 Welcome to Vietnam Travel Assistant (CLI)")
+    print("="*60)
+    print("Features:")
+    print("  • Semantic search on MongoDB Atlas")
+    print("  • Intelligent query caching")
+    print("  • Multi-turn conversation history")
+    print("  • Powered by Gemini 2.5 Flash")
+    print("\nType 'exit' or 'quit' to end the chat")
+    print("="*60 + "\n")
+    
     conversation_history = []
+    cache_stats = {"hits": 0, "misses": 0}
     
     while True:
-        query = input("\nEnter your travel question: ").strip()
-        if not query: continue
+        # Get user input
+        try:
+            query = input("\n📝 You: ").strip()
+        except KeyboardInterrupt:
+            print("\n\n👋 Goodbye!")
+            break
+        
+        if not query:
+            print("⚠️ Please enter a question.")
+            continue
+        
         if query.lower() in ("exit", "quit"):
-            print("Goodbye!"); break
-
-        query_embedding = get_embedding(query)
+            print("\n👋 Thank you for using Vietnam Travel Assistant!")
+            print(f"\n📊 Final Cache Statistics:")
+            print(f"   Cache Hits: {cache_stats['hits']}")
+            print(f"   Cache Misses: {cache_stats['misses']}")
+            if cache_stats['hits'] + cache_stats['misses'] > 0:
+                hit_rate = cache_stats['hits'] / (cache_stats['hits'] + cache_stats['misses']) * 100
+                print(f"   Hit Rate: {hit_rate:.1f}%")
+            break
+        
+        # Get query embedding
+        query_embedding = utils.get_embedding(query)
         if not query_embedding:
-            print("Sorry, I couldn't process your query."); continue
-
-        vector_matches = mongodb_vector_search(query_embedding)
-        relational_context = fetch_relational_context(vector_matches)
-        prompt = build_prompt(query, vector_matches, relational_context, conversation_history)
+            print("❌ Sorry, I couldn't process your query. Please try again.")
+            continue
         
-        print("\n--- Assistant's Answer ---")
+        # Check cache for similar response
+        cached_entry = utils.find_cached_similar_response(query_embedding, collection)
         
-        # --- MODIFIED: Call our new REST function ---
-        full_response = call_gemini_rest(prompt)
-        print(full_response) # Print the full response at once
+        if cached_entry:
+            print("\n" + "="*60)
+            print("💾 Response from Cache (Similar Query Found)")
+            print("="*60)
+            print(f"\n🤖 Assistant:\n{cached_entry['response']}")
+            cache_stats['hits'] += 1
+        else:
+            # Cache miss: perform full RAG
+            cache_stats['misses'] += 1
+            
+            print("\n⏳ Thinking...")
+            
+            # Perform vector search
+            vector_matches = utils.mongodb_vector_search(query_embedding, collection)
+            
+            # Fetch relational context
+            relational_context = utils.fetch_relational_context(vector_matches, collection)
+            
+            # Build comprehensive prompt
+            prompt_for_llm = utils.build_prompt(
+                query,
+                vector_matches,
+                relational_context,
+                conversation_history
+            )
+            
+            # Get response from Gemini
+            response = utils.call_gemini_rest(prompt_for_llm)
+            
+            # Cache the response
+            utils.cache_response(query, query_embedding, response, collection)
+            
+            print("\n" + "="*60)
+            print("🤖 Assistant:")
+            print("="*60)
+            print(f"\n{response}")
         
-        print("\n--------------------------\n")
-        conversation_history.append({"user": query, "assistant": full_response})
+        # Add to conversation history
+        conversation_history.append({"role": "user", "content": query})
+        conversation_history.append({"role": "assistant", "content": cached_entry.get('response') if cached_entry else response})
+        
+        # Print cache statistics after every query
+        total_queries = cache_stats['hits'] + cache_stats['misses']
+        if total_queries > 0:
+            hit_rate = cache_stats['hits'] / total_queries * 100
+            print(f"\n📊 Cache Stats: {cache_stats['hits']} hits, {cache_stats['misses']} misses ({hit_rate:.1f}% hit rate)")
+        
+        print("\n" + "-"*60)
 
 if __name__ == "__main__":
     interactive_chat()
